@@ -3,59 +3,51 @@ pipeline {
 
     environment {
         VENV_DIR = 'venv'
-        GCP_PROJECT = "mlops-471720"
-        GCLOUD_PATH = "/usr/bin"
+        GCP_PROJECT = 'mlops-471720'
+        GCLOUD_PATH = '/usr/bin'
     }
 
     stages {
-        stage('Cloning Github repo to Jenkins') {
+
+        stage('Checkout SCM') {
             steps {
-                script {
-                    echo 'Cloning Github repo to Jenkins............'
-                    checkout scmGit(
-                        branches: [[name: '*/main']],
-                        extensions: [],
-                        userRemoteConfigs: [[
-                            credentialsId: 'github-token',
-                            url: 'https://github.com/rhythmparashar/MlOps-Hotel.git'
-                        ]]
-                    )
-                }
+                echo 'Checking out code from GitHub...'
+                checkout([$class: 'GitSCM', 
+                    branches: [[name: '*/main']], 
+                    userRemoteConfigs: [[
+                        url: 'https://github.com/rhythmparashar/MlOps-Hotel.git', 
+                        credentialsId: 'github-token'
+                    ]]
+                ])
             }
         }
 
-        stage('Setting up Virtual Environment and Installing Dependencies') {
+        stage('Setup Virtual Environment') {
             steps {
-                script {
-                    echo 'Setting up Virtual Environment and Installing Dependencies............'
-                    sh '''
+                echo 'Setting up Python virtual environment...'
+                sh """
                     python -m venv ${VENV_DIR}
                     . ${VENV_DIR}/bin/activate
                     pip install --upgrade pip
                     pip install -e .
-                    '''
-                }
+                """
             }
         }
 
-        stage('Building and Pushing Docker Image to GCR') {
+        stage('Build and Push Docker Image to GCR') {
             steps {
                 withCredentials([file(credentialsId: 'gcp-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        echo 'Building and Pushing Docker Image to GCR.............'
-                        sh '''
-                        export PATH=$PATH:${GCLOUD_PATH}
+                        echo 'Building and Pushing Docker Image to GCR...'
+                        sh """
+                            export PATH=${GCLOUD_PATH}:\$PATH
+                            gcloud auth activate-service-account --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
+                            gcloud config set project ${GCP_PROJECT}
+                            gcloud auth configure-docker --quiet
 
-                        gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
-                        gcloud config set project ${GCP_PROJECT}
-                        gcloud auth configure-docker --quiet
-
-                        # Build Docker image for amd64 (Cloud Run compatible)
-                        docker buildx build --platform linux/amd64 -t gcr.io/${GCP_PROJECT}/ml-project:latest .
-
-                        # Push Docker image
-                        docker push gcr.io/${GCP_PROJECT}/ml-project:latest
-                        '''
+                            docker build -t gcr.io/${GCP_PROJECT}/ml-project:latest .
+                            docker push gcr.io/${GCP_PROJECT}/ml-project:latest
+                        """
                     }
                 }
             }
@@ -65,22 +57,30 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'gcp-key', variable: 'GOOGLE_APPLICATION_CREDENTIALS')]) {
                     script {
-                        echo 'Deploy to Google Cloud Run.............'
-                        sh '''
-                        export PATH=$PATH:${GCLOUD_PATH}
+                        echo 'Deploying to Google Cloud Run...'
+                        sh """
+                            export PATH=${GCLOUD_PATH}:\$PATH
+                            gcloud auth activate-service-account --key-file=\$GOOGLE_APPLICATION_CREDENTIALS
+                            gcloud config set project ${GCP_PROJECT}
 
-                        gcloud auth activate-service-account --key-file=${GOOGLE_APPLICATION_CREDENTIALS}
-                        gcloud config set project ${GCP_PROJECT}
-
-                        gcloud run deploy ml-project \
-                            --image=gcr.io/${GCP_PROJECT}/ml-project:latest \
-                            --platform=managed \
-                            --region=us-central1 \
-                            --allow-unauthenticated
-                        '''
+                            gcloud run deploy ml-project \
+                                --image gcr.io/${GCP_PROJECT}/ml-project:latest \
+                                --platform managed \
+                                --region asia-south1 \
+                                --allow-unauthenticated
+                        """
                     }
                 }
             }
+        }
+    }
+
+    post {
+        success {
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            echo 'Pipeline failed. Check logs for errors.'
         }
     }
 }
